@@ -1722,8 +1722,8 @@ void lustre_swab_obdo (struct obdo  *o)
         __swab32s (&o->o_uid_h);
         __swab32s (&o->o_gid_h);
         __swab64s (&o->o_data_version);
-        CLASSERT(offsetof(typeof(*o), o_padding_4) != 0);
-        CLASSERT(offsetof(typeof(*o), o_padding_5) != 0);
+        __swab64s ((__u64*)&o->o_sent_time.tv_sec);
+        __swab64s ((__u64*)&o->o_sent_time.tv_usec);
         CLASSERT(offsetof(typeof(*o), o_padding_6) != 0);
 
 }

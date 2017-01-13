@@ -38,6 +38,7 @@
 #include <lprocfs_status.h>
 #include <linux/seq_file.h>
 #include "osc_internal.h"
+#include <ascar.h>
 
 #ifdef CONFIG_PROC_FS
 static int osc_active_seq_show(struct seq_file *m, void *v)
@@ -92,8 +93,8 @@ static ssize_t osc_max_rpcs_in_flight_seq_write(struct file *file,
 {
 	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
 	struct client_obd *cli = &dev->u.cli;
+	struct qos_data_t *qos = &cli->qos;
 	int rc;
-	int adding, added, req_count;
 	__s64 val;
 
 	rc = lprocfs_str_to_s64(buffer, count, &val);
@@ -103,30 +104,52 @@ static ssize_t osc_max_rpcs_in_flight_seq_write(struct file *file,
 		return -ERANGE;
 
 	LPROCFS_CLIMP_CHECK(dev);
-
-	adding = (int)val - cli->cl_max_rpcs_in_flight;
-	req_count = atomic_read(&osc_pool_req_count);
-	if (adding > 0 && req_count < osc_reqpool_maxreqcount) {
-		/*
-		 * There might be some race which will cause over-limit
-		 * allocation, but it is fine.
-		 */
-		if (req_count + adding > osc_reqpool_maxreqcount)
-			adding = osc_reqpool_maxreqcount - req_count;
-
-		added = osc_rq_pool->prp_populate(osc_rq_pool, adding);
-		atomic_add(added, &osc_pool_req_count);
-	}
-
-	spin_lock(&cli->cl_loi_list_lock);
-	cli->cl_max_rpcs_in_flight = val;
-	client_adjust_max_dirty(cli);
-	spin_unlock(&cli->cl_loi_list_lock);
-
+	set_max_rpcs_in_flight((int)val, cli);
 	LPROCFS_CLIMP_EXIT(dev);
+
+	/* Update the value tracked by QoS routines too */
+	spin_lock(&qos->lock);
+	qos->max_rpc_in_flight100 = val * 100;
+	spin_unlock(&qos->lock);
+
 	return count;
 }
 LPROC_SEQ_FOPS(osc_max_rpcs_in_flight);
+
+static int osc_min_brw_rpc_gap_seq_show(struct seq_file *m, void *v)
+{
+	struct obd_device *dev = m->private;
+	struct client_obd *cli = &dev->u.cli;
+	struct qos_data_t *qos = &cli->qos;
+
+	spin_lock(&qos->lock);
+	seq_printf(m, "%u\n", qos->min_usec_between_rpcs);
+	spin_unlock(&qos->lock);
+	return 0;
+}
+
+static ssize_t osc_min_brw_rpc_gap_seq_write(struct file *file,
+						const char __user *buffer,
+						size_t count, loff_t *off)
+{
+	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
+	struct client_obd *cli = &dev->u.cli;
+	int rc;
+	__s64 val;
+	struct qos_data_t *qos = &cli->qos;
+
+	rc = lprocfs_str_to_s64(buffer, count, &val);
+	if (rc)
+		return rc;
+	if (val < 0)
+		return -ERANGE;
+
+	spin_lock(&qos->lock);
+	qos->min_usec_between_rpcs = val;
+	spin_unlock(&qos->lock);
+	return count;
+}
+LPROC_SEQ_FOPS(osc_min_brw_rpc_gap);
 
 static int osc_max_dirty_mb_seq_show(struct seq_file *m, void *v)
 {
@@ -599,6 +622,80 @@ static int osc_unstable_stats_seq_show(struct seq_file *m, void *v)
 }
 LPROC_SEQ_FOPS_RO(osc_unstable_stats);
 
+static int osc_qos_rules_seq_show(struct seq_file *m, void *data)
+{
+	struct obd_device *dev = m->private;
+	struct client_obd *cli = &dev->u.cli;
+	struct qos_data_t *qos = &cli->qos;
+	int i;
+	struct qos_rule_t *r;
+
+	spin_lock(&qos->lock);
+	if (0 == qos->rule_no || NULL == qos->rules || 0 == qos->min_gap_between_updating_mrif) {
+		seq_printf(m, "0\n");
+		/* Make sure the upcoming for loop doesn't run */
+		qos->rule_no = 0;
+	} else {
+		seq_printf(m, "%d,%d\n", qos->rule_no, 1000000 / qos->min_gap_between_updating_mrif);
+	}
+	for (i = 0; i < qos->rule_no; ++i) {
+		r = &qos->rules[i];
+		seq_printf(m, "%llu,%llu,%llu,%llu,%u,%u,%d,%d,%u,%d,%llu,%llu,%u\n",
+			      r->ack_ewma_lower,  r->ack_ewma_upper,
+			      r->send_ewma_lower, r->send_ewma_upper,
+			      r->rtt_ratio100_lower, r->rtt_ratio100_upper,
+			      r->m100, r->b100, r->tau,
+			      r->used_times,
+			      r->ack_ewma_avg, r->send_ewma_avg, r->rtt_ratio100_avg);
+	}
+	spin_unlock(&qos->lock);
+	return 0;
+}
+
+static ssize_t osc_qos_rules_seq_write(struct file *file,
+				       const char __user *buffer,
+				       size_t count, loff_t *off)
+{
+	struct obd_device *dev = ((struct seq_file *)file->private_data)->private;
+	struct client_obd *cli = &dev->u.cli;
+	struct qos_data_t *qos = &cli->qos;
+	int rc;
+	char *kernbuf = NULL;
+
+	OBD_ALLOC(kernbuf, count + 1);
+	if (NULL == kernbuf) {
+		return -ENOMEM;
+	}
+	if (copy_from_user(kernbuf, buffer, count)) {
+		rc = -EFAULT;
+		goto out_free_kernbuf;
+	}
+	/* Make sure the buf ends with a null so that sscanf won't overread */
+	kernbuf[count] = '\0';
+
+	spin_lock(&qos->lock);
+	/* parse_qos_rules() will free existing rules in qos before starting parsing */
+	rc = parse_qos_rules(kernbuf, qos);
+	if (0 == rc) {
+		/* return the number of chars processed on a success parsing */
+		rc = count;
+	}
+	qos->ack_ewma.ea = 0;
+	qos->ack_ewma.last_time.tv_sec = 0;
+	qos->ack_ewma.last_time.tv_usec = 0;
+	qos->sent_ewma.ea = 0;
+	qos->sent_ewma.last_time.tv_sec = 0;
+	qos->sent_ewma.last_time.tv_usec = 0;
+	qos->rtt_ratio100 = 0;
+	qos->smallest_rtt = 0;
+	spin_unlock(&qos->lock);
+out_free_kernbuf:
+	OBD_FREE(kernbuf, count + 1);
+	return rc;
+
+}
+LPROC_SEQ_FOPS(osc_qos_rules);
+
 LPROC_SEQ_FOPS_RO_TYPE(osc, uuid);
 LPROC_SEQ_FOPS_RO_TYPE(osc, connect_flags);
 LPROC_SEQ_FOPS_RO_TYPE(osc, blksize);
@@ -647,6 +744,8 @@ struct lprocfs_vars lprocfs_osc_obd_vars[] = {
 	  .fops	=	&osc_obd_max_pages_per_rpc_fops	},
 	{ .name	=	"max_rpcs_in_flight",
 	  .fops	=	&osc_max_rpcs_in_flight_fops	},
+	{ .name	=	"min_brw_rpc_gap",
+	  .fops	=	&osc_min_brw_rpc_gap_fops	},
 	{ .name	=	"destroys_in_flight",
 	  .fops	=	&osc_destroys_in_flight_fops	},
 	{ .name	=	"max_dirty_mb",
@@ -683,6 +782,8 @@ struct lprocfs_vars lprocfs_osc_obd_vars[] = {
 	  .fops	=	&osc_pinger_recov_fops		},
 	{ .name	=	"unstable_stats",
 	  .fops	=	&osc_unstable_stats_fops	},
+	{ .name	=	"qos_rules",
+	  .fops	=	&osc_qos_rules_fops		},
 	{ NULL }
 };
 

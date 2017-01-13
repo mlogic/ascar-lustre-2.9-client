@@ -3336,8 +3336,7 @@ struct obdo {
 						 * each stripe.
 						 * brw: grant space consumed on
 						 * the client for the write */
-	__u64			o_padding_4;
-	__u64			o_padding_5;
+	struct timeval		o_sent_time;	/* timeval is 64x2 bits on Linux */
 	__u64			o_padding_6;
 };
 

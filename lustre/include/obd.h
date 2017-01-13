@@ -50,6 +50,7 @@
 #include <lustre_intent.h>
 #include <lvfs.h>
 #include <lustre_quota.h>
+#include "ascar.h"
 
 #define MAX_OBD_DEVICES 8192
 
@@ -331,6 +332,8 @@ struct client_obd {
 	void			*cl_lru_work;
 	/* hash tables for osc_quota_info */
 	struct cfs_hash		*cl_quota_hash[LL_MAXQUOTAS];
+
+	struct qos_data_t	qos;
 };
 #define obd2cli_tgt(obd) ((char *)(obd)->u.cli.cl_target_uuid.uuid)
 

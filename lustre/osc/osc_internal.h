@@ -245,4 +245,68 @@ extern unsigned long osc_cache_shrink_count(struct shrinker *sk,
 extern unsigned long osc_cache_shrink_scan(struct shrinker *sk,
 					   struct shrink_control *sc);
 
+static inline void qos_throttle(struct qos_data_t *qos)
+{
+	struct timeval now;
+	long           usec_since_last_rpc;
+	long           need_sleep_usec = 0;
+
+	spin_lock(&qos->lock);
+	if (0 == qos->min_usec_between_rpcs)
+		goto out;
+
+	do_gettimeofday(&now);
+	usec_since_last_rpc = cfs_timeval_sub(&now, &qos->last_rpc_time, NULL);
+	if (usec_since_last_rpc < 0) {
+		usec_since_last_rpc = 0;
+	}
+	if (usec_since_last_rpc < qos->min_usec_between_rpcs) {
+		need_sleep_usec = qos->min_usec_between_rpcs - usec_since_last_rpc;
+	}
+	qos->last_rpc_time = now;
+out:
+	spin_unlock(&qos->lock);
+	if (0 == need_sleep_usec) {
+		return;
+	}
+
+	/* About timer ranges:
+	   Ref: https://www.kernel.org/doc/Documentation/timers/timers-howto.txt */
+	if (need_sleep_usec < 1000) {
+		udelay(need_sleep_usec);
+	} else if (need_sleep_usec < 20000) {
+		usleep_range(need_sleep_usec - 1, need_sleep_usec);
+	} else {
+		msleep(need_sleep_usec / 1000);
+	}
+}
+
+/* You must call LPROCFS_CLIMP_CHECK() on the obd device before and
+ * LPROCFS_CLIMP_EXIT() after calling this function. They are not called inside
+ * this function, because they may return an error code.
+ */
+static inline void set_max_rpcs_in_flight(int val, struct client_obd *cli)
+{
+	int adding, added, req_count;
+
+	adding = val - cli->cl_max_rpcs_in_flight;
+	req_count = atomic_read(&osc_pool_req_count);
+	if (adding > 0 && req_count < osc_reqpool_maxreqcount) {
+		/*
+		 * There might be some race which will cause over-limit
+		 * allocation, but it is fine.
+		 */
+		if (req_count + adding > osc_reqpool_maxreqcount)
+			adding = osc_reqpool_maxreqcount - req_count;
+
+		added = osc_rq_pool->prp_populate(osc_rq_pool, adding);
+		atomic_add(added, &osc_pool_req_count);
+	}
+
+	spin_lock(&cli->cl_loi_list_lock);
+	cli->cl_max_rpcs_in_flight = val;
+	client_adjust_max_dirty(cli);
+	spin_unlock(&cli->cl_loi_list_lock);
+}
+
 #endif /* OSC_INTERNAL_H */

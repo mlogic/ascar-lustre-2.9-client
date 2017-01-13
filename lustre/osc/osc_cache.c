@@ -2316,6 +2316,7 @@ static int osc_io_unplug0(const struct lu_env *env, struct client_obd *cli,
 	} else {
 		CDEBUG(D_CACHE, "Queue writeback work for client %p.\n", cli);
 		LASSERT(cli->cl_writeback_work != NULL);
+		qos_throttle(&cli->qos);
 		rc = ptlrpcd_queue_work(cli->cl_writeback_work);
 	}
 	return rc;

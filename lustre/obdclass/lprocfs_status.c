@@ -814,6 +814,12 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 	int                             j;
 	int                             k;
 	int                             rw      = 0;
+	struct qos_data_t		*qos;
+	__u64				ack_ewma;
+	__u64				sent_ewma;
+	int				rtt_ratio100;
+	__u64				read_tp;
+	__u64				write_tp;
 
 	LASSERT(obd != NULL);
 	LPROCFS_CLIMP_CHECK(obd);
@@ -875,15 +881,33 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 		ret.lc_sum = sum;
 	} else
 		ret.lc_sum = 0;
+	qos = &obd->u.cli.qos;
+	spin_lock(&qos->lock);
+	ack_ewma  = qos_get_ewma_usec(&qos->ack_ewma);
+	sent_ewma = qos_get_ewma_usec(&qos->sent_ewma);
+	rtt_ratio100 = qos->rtt_ratio100;
+
+	/* Refresh throughput. If a long time has passed since we
+           received last req, throughput data is stale. */
+	calc_throughput(qos, OST_READ-OST_READ, 0);
+	calc_throughput(qos, OST_WRITE-OST_READ, 0);
+
+	read_tp   = qos->tp_last_sec[0];
+	write_tp  = qos->tp_last_sec[1];
+	spin_unlock(&qos->lock);
 	seq_printf(m, "    rpcs:\n"
 		   "       inflight: %u\n"
 		   "       unregistering: %u\n"
 		   "       timeouts: %u\n"
-		   "       avg_waittime: %llu %s\n",
+		   "       avg_waittime: %llu %s\n"
+		   "       ack_ewma: %llu usec\n"
+		   "       sent_ewma: %llu usec\n"
+		   "       rtt_ratio100: %d\n",
 		   atomic_read(&imp->imp_inflight),
 		   atomic_read(&imp->imp_unregistering),
 		   atomic_read(&imp->imp_timeouts),
-		   ret.lc_sum, header->lc_units);
+		   ret.lc_sum, header->lc_units,
+		   ack_ewma, sent_ewma, rtt_ratio100);
 
 	k = 0;
 	for(j = 0; j < IMP_AT_MAX_PORTALS; j++) {
@@ -938,6 +962,8 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 					   k / j, (100 * k / j) % 100);
 		}
 	}
+	seq_printf(m, "    read_throughput: %llu\n", read_tp);
+	seq_printf(m, "    write_throughput: %llu\n", write_tp);
 
 out_climp:
 	LPROCFS_CLIMP_EXIT(obd);
