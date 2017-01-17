@@ -98,4 +98,5 @@ EXTRA_DIST = \
 	upcall_cache.h \
 	lustre_kernelcomm.h \
 	seq_range.h \
-	uapi_kernelcomm.h
+	uapi_kernelcomm.h \
+	ascar.h
