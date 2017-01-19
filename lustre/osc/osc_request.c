@@ -1677,9 +1677,6 @@ static int qos_adjust(struct obd_device *obd, struct timeval *new_ack_time,
 	struct timeval now;
 	long rtt;
 	int rtt_ratio100;
-	/* In practice, we need to use some value much smaller than
-	 * OSC_MAX_RIF_MAX or machines can easily lock up */
-	const int mrif_upper_limit = 30;
 	long usec_since_last_mrif_update;
 
 	spin_lock(&qos->lock);
@@ -1736,9 +1733,9 @@ static int qos_adjust(struct obd_device *obd, struct timeval *new_ack_time,
 					CDEBUG(D_INFO, "New max_rpc_in_flight100 is negative, reset it to 0\n");
 					qos->max_rpc_in_flight100 = 0;
 				}
-				if (qos->max_rpc_in_flight100 > mrif_upper_limit * 100) {
-					CDEBUG(D_INFO, "New max_rpc_in_flight100 is larger than %d, reset it to max allowed value\n", mrif_upper_limit * 100);
-					qos->max_rpc_in_flight100 = mrif_upper_limit * 100;
+				if (qos->max_rpc_in_flight100 > OSC_MAX_RIF_MAX * 100) {
+					CDEBUG(D_INFO, "New max_rpc_in_flight100 is larger than %d, reset it to max allowed value\n", OSC_MAX_RIF_MAX * 100);
+					qos->max_rpc_in_flight100 = OSC_MAX_RIF_MAX * 100;
 				}
 				new_mrif = qos->max_rpc_in_flight100 / 100;
 				if (new_mrif < 1) {
