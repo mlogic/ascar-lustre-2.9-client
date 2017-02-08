@@ -904,7 +904,7 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 		   "       avg_waittime: %llu %s\n"
 		   "       ack_ewma: %llu usec\n"
 		   "       sent_ewma: %llu usec\n"
-		   "       rtt_ratio100: %d\n",
+		   "       rtt_ratio100: %d\n"
 		   "       tau: %u\n",
 		   atomic_read(&imp->imp_inflight),
 		   atomic_read(&imp->imp_unregistering),
