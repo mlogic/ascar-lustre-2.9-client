@@ -688,6 +688,7 @@ static ssize_t osc_qos_rules_seq_write(struct file *file,
 	qos->sent_ewma.last_time.tv_usec = 0;
 	qos->rtt_ratio100 = 0;
 	qos->smallest_rtt = 0;
+	qos->min_usec_between_rpcs = 0;
 	spin_unlock(&qos->lock);
 out_free_kernbuf:
 	OBD_FREE(kernbuf, count + 1);

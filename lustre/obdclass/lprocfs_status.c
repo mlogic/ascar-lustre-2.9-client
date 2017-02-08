@@ -818,6 +818,7 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 	__u64				ack_ewma;
 	__u64				sent_ewma;
 	int				rtt_ratio100;
+	unsigned int			tau;
 	__u64				read_tp;
 	__u64				write_tp;
 
@@ -886,6 +887,7 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 	ack_ewma  = qos_get_ewma_usec(&qos->ack_ewma);
 	sent_ewma = qos_get_ewma_usec(&qos->sent_ewma);
 	rtt_ratio100 = qos->rtt_ratio100;
+	tau = qos->min_usec_between_rpcs;
 
 	/* Refresh throughput. If a long time has passed since we
            received last req, throughput data is stale. */
@@ -903,11 +905,12 @@ int lprocfs_import_seq_show(struct seq_file *m, void *data)
 		   "       ack_ewma: %llu usec\n"
 		   "       sent_ewma: %llu usec\n"
 		   "       rtt_ratio100: %d\n",
+		   "       tau: %u\n",
 		   atomic_read(&imp->imp_inflight),
 		   atomic_read(&imp->imp_unregistering),
 		   atomic_read(&imp->imp_timeouts),
 		   ret.lc_sum, header->lc_units,
-		   ack_ewma, sent_ewma, rtt_ratio100);
+		   ack_ewma, sent_ewma, rtt_ratio100, tau);
 
 	k = 0;
 	for(j = 0; j < IMP_AT_MAX_PORTALS; j++) {
