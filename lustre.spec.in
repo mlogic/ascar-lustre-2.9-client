@@ -96,7 +96,7 @@
 Summary: Lustre File System
 Name: %{lustre_name}
 Version: %{version}
-Release: 2%{?dist}
+Release: 3%{?dist}
 License: GPL
 Group: Utilities/System
 Source: lustre-%{version}.tar.gz
